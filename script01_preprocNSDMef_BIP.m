@@ -20,7 +20,7 @@ task_labels = {'NSDspecial01','NSDspecial02','NSDspecial03','NSDspecial04','NSDs
 task_list = readtable(fullfile(localDataPath.input,['sub-' sub_label],['ses-' ses_label],['sub-' sub_label '_ses-' ses_label '_scans.tsv']), 'FileType', 'text', 'Delimiter', '\t', 'TreatAsEmpty', 'n/a');
 
 % electrodes path (to exclude electrodes on the SOZ)
-elecsPath = fullfile(localDataPath.input, ['sub-' sub_label], ['ses-' ses_label], 'ieeg', ['sub-' sub_label '_ses-' ses_label '_electrodes.tsv']);
+elecsPath = fullfile(localDataPath.input, ['sub-' sub_label], ['ses-' ses_label], 'ieeg', ['sub-' sub_label '_ses-' ses_label '_space-ACPC_electrodes.tsv']);
 elecs = ieeg_readtableRmHyphens(elecsPath);
 
 % For all possible runs, set data_info
@@ -118,42 +118,48 @@ for ii = 1:length(data_info)
     eventsSTCurr(eventsSTCurr.sample_start+samprange(end)+1 > size(data, 2), :) = [];
 
     %%% ------------------------------------------------------------%%% 
-    %%% Preprocess: highpass and CAR by lowest variance
+    %%% Preprocess: highpass and bipolar re-reference
     
     % highpass the SEEG channels
     data(strcmp(all_channels.type, 'SEEG'), :) = ieeg_highpass(data(strcmp(all_channels.type, 'SEEG'), :)', srate)';
 
-    % re-reference: CAR by lowest variance (across data from first to last events)
-    opts = struct();
-    opts.vartype = 'var';
-    opts.pctThresh = 25; % leave at default of 25%
-    opts.winResp = [eventsSTCurr.onset(1) eventsSTCurr.onset(end)]; 
-    tt_all = (1:size(data,2))/srate;
-    badChs = find(all_channels.status==0 | all_channels.soz==1); % bad channels or soz
-    [car_tmp, chsUsed] = ccep_CARVariance(tt_all, data, srate, badChs, [], opts);
-    % only add CAR-reref data for sEEG channels
-    data_car = data;
-    data_car(strcmp(all_channels.type, 'SEEG'), :) = car_tmp(strcmp(all_channels.type, 'SEEG'), :);
-    clear car_tmp
+    % re-reference: bipolar
+    badChs = find(all_channels.status==0 | strcmp(all_channels.type, 'REF')); % bad channels % not excluding SOZ here
+    seeg_chans = find(strcmp(all_channels.type, 'SEEG') | strcmp(all_channels.type, 'REF'));
+    other_chans = find(~strcmp(all_channels.type, 'SEEG') & ~strcmp(all_channels.type, 'REF'));
+    
+    [dataOut, bipolarNames] = ieeg_bipolarSEEG(data(seeg_chans,:)', all_channels.name(seeg_chans), badChs);
+
+    % concatenate sEEG channels with other channels that were not BIP re-referenced
+    data_bip = [dataOut data(other_chans,:)']';
+    
+    % create bipolar channels structure
+    bip_channels.name = [bipolarNames; all_channels.name(other_chans)];
+    bip_channels.type = bipolarNames;
+    bip_channels.type(:) = {'SEEG'};
+    bip_channels.type = [bip_channels.type; all_channels.type(other_chans)];
+    bip_channels.status = [ones(size(bipolarNames)); all_channels.status(other_chans)];
+
+    clear dataOut
 
     %%% ------------------------------------------------------------%%% 
     %%% Epoch data
-    M = zeros(size(data_car, 1), length(samprange), height(eventsSTCurr));
+    M = zeros(size(data_bip, 1), length(samprange), height(eventsSTCurr));
     for jj = 1:height(eventsSTCurr)
-        M(:, :, jj) = data_car(:, (round(eventsSTCurr.onset(jj)*srate)+samprange(1)+1) : (round(eventsSTCurr.onset(jj)*srate)+samprange(end)+1)); % convert to 1 indexing
+        M(:, :, jj) = data_bip(:, (round(eventsSTCurr.onset(jj)*srate)+samprange(1)+1) : (round(eventsSTCurr.onset(jj)*srate)+samprange(end)+1)); % convert to 1 indexing
     end
 
     % after epoching - check the DI1 channel to make sure that the first sample of 1 occurs at t=0
-    %di1 = squeeze(M(strcmp(all_channels.name, 'DigitalInput1'), :, :));
+    %di1 = squeeze(M(strcmp(bip_channels.name, 'DigitalInput1'), :, :));
     %figure; plot(tt, di1); xlim([-0.01, 0.01]);
     
     %%% ------------------------------------------------------------%%% 
     %%% Extract broadband and epoch data
     bands = [70  80;80 90; 90 100; 100 110; 130 140; 140 150; 150 160; 160 170];  % 10 hz bins, avoiding 60 and 120
-    bb_power = data_car; % initizalize with all channels
-    bb_power(strcmp(all_channels.type, 'SEEG'), :) = ieeg_getHilbert(data_car(strcmp(all_channels.type, 'SEEG'), :)', bands, srate, 'power')';
+    bb_power = data_bip; % initizalize with all channels
+    bb_power(strcmp(bip_channels.type, 'SEEG'), :) = ieeg_getHilbert(data_bip(strcmp(bip_channels.type, 'SEEG'), :)', bands, srate, 'power')';
     % epoch broadband
-    BB = zeros(size(data_car, 1), length(samprange), height(eventsSTCurr));
+    BB = zeros(size(data_bip, 1), length(samprange), height(eventsSTCurr));
     for jj = 1:height(eventsSTCurr)
         BB(:,:,jj) = bb_power(:, (round(eventsSTCurr.onset(jj)*srate)+samprange(1)+1) : (round(eventsSTCurr.onset(jj)*srate)+samprange(end)+1)); % convert to 1 indexing
     end
@@ -171,14 +177,14 @@ Mbb = single(Mbb);
 Mdata = single(Mdata);
 
 % Save all outputs
-outdir = fullfile(localDataPath.output,'derivatives','preproc_car',['sub-' sub_label]);
+outdir = fullfile(localDataPath.output,'derivatives','preproc_bip',['sub-' sub_label]);
 if ~exist(outdir,'dir')
     sprintf(['making output directory: ' outdir])
     mkdir(outdir);
 end
-save(fullfile(outdir, ['sub-' sub_label '_desc-preprocCAR_ieeg.mat']), 'tt', 'srate', 'Mdata', 'eventsST', 'all_channels', '-v7.3');
-save(fullfile(outdir, ['sub-' sub_label '_desc-preprocCARBB_ieeg.mat']), 'tt', 'srate', 'Mbb', 'eventsST', 'all_channels', '-v7.3');
-writetable(eventsST, fullfile(outdir, ['sub-' sub_label '_desc-preprocCAR_events.tsv']), 'FileType', 'text', 'Delimiter', '\t');
+save(fullfile(outdir, ['sub-' sub_label '_desc-preprocBIP_ieeg.mat']), 'tt', 'srate', 'Mdata', 'eventsST', 'bip_channels', '-v7.3');
+save(fullfile(outdir, ['sub-' sub_label '_desc-preprocBIPBB_ieeg.mat']), 'tt', 'srate', 'Mbb', 'eventsST', 'bip_channels', '-v7.3');
+writetable(eventsST, fullfile(outdir, ['sub-' sub_label '_desc-preprocBIP_events.tsv']), 'FileType', 'text', 'Delimiter', '\t');
 
 
 %% Load BB output to check
@@ -189,15 +195,15 @@ addpath('functions');
 
 subjects = {'01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19'};
 
-ss = 5;
+ss = 18;
 sub_label = subjects{ss};
 ses_label = 'ieeg01';
 
-outdir = fullfile(localDataPath.output,'derivatives','preproc_car',['sub-' sub_label]);
+outdir = fullfile(localDataPath.output,'derivatives','preproc_bip',['sub-' sub_label]);
 
-% load(fullfile(outdir, ['sub-' sub_label '_desc-preprocCAR_ieeg.mat']), 'tt', 'srate', 'Mdata', 'eventsST', 'all_channels');
-load(fullfile(outdir, ['sub-' sub_label '_desc-preprocCARBB_ieeg.mat']), 'tt', 'srate', 'Mbb', 'eventsST', 'all_channels');
-readtable(fullfile(outdir, ['sub-' sub_label '_desc-preprocCAR_events.tsv']), 'FileType', 'text', 'Delimiter', '\t', 'TreatAsEmpty', 'n/a');
+% load(fullfile(outdir, ['sub-' sub_label '_desc-preprocBIP_ieeg.mat']), 'tt', 'srate', 'Mdata', 'eventsST', 'bip_channels');
+load(fullfile(outdir, ['sub-' sub_label '_desc-preprocBIPBB_ieeg.mat']), 'tt', 'srate', 'Mbb', 'eventsST', 'bip_channels');
+readtable(fullfile(outdir, ['sub-' sub_label '_desc-preprocBIP_events.tsv']), 'FileType', 'text', 'Delimiter', '\t', 'TreatAsEmpty', 'n/a');
 
 %% Normalize bb power per run
 
@@ -227,7 +233,7 @@ t_avg = tt>0.1 & tt<.5;
 
 for el_nr = 1:size(Mbb_norm,1)
     
-    if ismember(all_channels.type(el_nr),'SEEG') && all_channels.status(el_nr)==1
+    if ismember(bip_channels.type(el_nr),'SEEG') && bip_channels.status(el_nr)==1
         
         bb_strength = squeeze(mean(Mbb_norm(el_nr,t_avg==1,:),2));
         
@@ -246,27 +252,27 @@ for el_nr = 1:size(Mbb_norm,1)
 
             all_chan_snr(el_nr) = NCSNR;
         else
-            disp(['channel ' all_channels.name{el_nr} ' should be set to bad'])
+            disp(['channel ' bip_channels.name{el_nr} ' should be set to bad'])
         end
     end
 end
 
 %% imagesc broadband and render prelim
 
-good_channel_nrs = find(all_channels.status==1);
+good_channel_nrs = find(bip_channels.status==1);
 
 figure
 imagesc(tt,1:length(good_channel_nrs),mean(Mbb_norm(good_channel_nrs,:,:),3),[-.2 .2])
-set(gca,'YTick',1:length(good_channel_nrs),'YTickLabels',all_channels.name(good_channel_nrs))
+set(gca,'YTick',1:length(good_channel_nrs),'YTickLabels',bip_channels.name(good_channel_nrs))
 
 %% render and plot noise ceiling SNR
 
 elecsPath = fullfile(localDataPath.input, ['sub-' sub_label], ['ses-' ses_label], 'ieeg', ['sub-' sub_label '_ses-' ses_label '_electrodes.tsv']);
 elecs = ieeg_readtableRmHyphens(elecsPath);
 
-name = all_channels.name;
-all_channels_table = table(name);
-elecs = ieeg_sortElectrodes(elecs, all_channels_table, 0);
+name = bip_channels.name;
+bip_channels_table = table(name);
+elecs = ieeg_sortElectrodes(elecs, bip_channels_table, 0);
 
 % load pial and inflated giftis
 gL = gifti(fullfile(localDataPath.input,'sourcedata','freesurfer',['sub-' sub_label],['white.L.surf.gii']));
@@ -326,7 +332,7 @@ for hh = 2%1:2
         ieeg_elAdd(els(electrodes_thisHemi,:),[.1 .1 .1],15) % add electrode positions
         ieeg_viewLight(v_d(1),v_d(2)) % change viewing angle   
         set(gcf,'PaperPositionMode','auto')
-%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render',['sub-' sub_label],...
+%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render_bip',['sub-' sub_label],...
 %             ['inflated_dots_sub-' sub_label '_WangAreas_v' int2str(v_d(1)) '_' int2str(v_d(2)) '_' hemi]))
          
         % with labels 
@@ -336,7 +342,7 @@ for hh = 2%1:2
         ieeg_label(els_pop(electrodes_thisHemi,:),20,6,elecs.name(electrodes_thisHemi)) % add electrode names
         ieeg_viewLight(v_d(1),v_d(2)) % change viewing angle   
         set(gcf,'PaperPositionMode','auto')
-%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render',['sub-' sub_label],...
+%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render_bip',['sub-' sub_label],...
 %             ['inflated_labels_sub-' sub_label '_WangAreas_v' int2str(v_d(1)) '_' int2str(v_d(2)) '_' hemi]))
              
         % with activity
@@ -347,7 +353,7 @@ for hh = 2%1:2
         ieeg_elAdd_sizable(els_pop(electrodes_thisHemi,:),all_chan_snr_plot(electrodes_thisHemi),.8,40) % add electrode positions
         ieeg_viewLight(v_d(1),v_d(2)) % change viewing angle   
         set(gcf,'PaperPositionMode','auto')
-%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render',['sub-' sub_label],...
+%         print('-dpng','-r300',fullfile(localDataPath.input,'derivatives','render_bip',['sub-' sub_label],...
 %             ['NCSNR_sub-' sub_label '_WangAreas_v' int2str(v_d(1)) '_' int2str(v_d(2)) '_' hemi]))
     end
 %     close all
