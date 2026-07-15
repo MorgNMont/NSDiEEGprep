@@ -10,7 +10,7 @@ localDataPath = setLocalDataPath(1); % runs local PersonalDataPath (gitignored)
 addpath('functions');
 
 % subject to preprocess
-ss = 18;
+ss = 2;
 sub_label = sprintf('%02d', ss);
 
 ses_label = 'ieeg01';
@@ -56,6 +56,15 @@ all_channels.status = good_channel_bool; % 1 is good, zero is bad, -1 is SOZ
 % SOZ channels
 elecsSOZ = elecs.name(contains(elecs.seizure_zone, 'SOZ')); % first set SOZ channels to bad
 all_channels.soz = ismember(all_channels.name, elecsSOZ);
+
+% load segmented data to get segs for this subject
+participants = readtable(fullfile(localDataPath.input, 'participants.tsv'), 'Filetype', 'text', 'Delimiter', '\t');
+seg5 = participants.seg5{strcmp(participants.participant_id, sprintf('sub-%s', sub_label))};
+seg5 = strip(split(seg5, ','));
+seg6 = participants.seg6{strcmp(participants.participant_id, sprintf('sub-%s', sub_label))};
+seg6 = strip(split(seg6, ','));
+if strcmp(seg5, 'n/a'), seg5 = {}; end
+if strcmp(seg6, 'n/a'), seg6 = {}; end
 
 
 %% Loop through NSD01 - NSD10 and all runs individually, concatenate output at the end
@@ -128,7 +137,7 @@ for ii = 1:length(data_info)
     seeg_chans = find(strcmp(all_channels.type, 'SEEG') | strcmp(all_channels.type, 'REF'));
     other_chans = find(~strcmp(all_channels.type, 'SEEG') & ~strcmp(all_channels.type, 'REF'));
     
-    [dataOut, bipolarNames] = ieeg_bipolarSEEG(data(seeg_chans,:)', all_channels.name(seeg_chans), badChs);
+    [dataOut, bipolarNames, ~, badChs_bip] = ieeg_bipolarSEEG(data(seeg_chans,:)', all_channels.name(seeg_chans), badChs, seg5, seg6);
 
     % concatenate sEEG channels with other channels that were not BIP re-referenced
     data_bip = [dataOut data(other_chans,:)']';
@@ -138,7 +147,8 @@ for ii = 1:length(data_info)
     bip_channels.type = bipolarNames;
     bip_channels.type(:) = {'SEEG'};
     bip_channels.type = [bip_channels.type; all_channels.type(other_chans)];
-    bip_channels.status = [ones(size(bipolarNames)); all_channels.status(other_chans)];
+    bip_channels.status = [true(size(bipolarNames)); all_channels.status(other_chans)];
+    bip_channels.status(badChs_bip) = false; % since all bipolar channels are contiguous starting from 1, this indexing is accurate
 
     clear dataOut
 
@@ -233,7 +243,7 @@ t_avg = tt>0.1 & tt<.5;
 
 for el_nr = 1:size(Mbb_norm,1)
     
-    if ismember(bip_channels.type(el_nr),'SEEG') && bip_channels.status(el_nr)==1
+    if ismember(bip_channels.type(el_nr),'SEEG') && bip_channels.status(el_nr)
         
         bb_strength = squeeze(mean(Mbb_norm(el_nr,t_avg==1,:),2));
         
@@ -259,7 +269,7 @@ end
 
 %% imagesc broadband and render prelim
 
-good_channel_nrs = find(bip_channels.status==1);
+good_channel_nrs = find(bip_channels.status);
 
 figure
 imagesc(tt,1:length(good_channel_nrs),mean(Mbb_norm(good_channel_nrs,:,:),3),[-.2 .2])

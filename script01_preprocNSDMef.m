@@ -10,7 +10,7 @@ localDataPath = setLocalDataPath(1); % runs local PersonalDataPath (gitignored)
 addpath('functions');
 
 % subject to preprocess
-ss = 18;
+ss = 2;
 sub_label = sprintf('%02d', ss);
 
 ses_label = 'ieeg01';
@@ -52,10 +52,10 @@ end
 % Channel info across runs
 all_channels.name = channels_table.name;
 all_channels.type = channels_table.type;
-all_channels.status = good_channel_bool; % 1 is good, zero is bad, -1 is SOZ
+all_channels.status = good_channel_bool; % 1 is good, zero is bad
 % SOZ channels
 elecsSOZ = elecs.name(contains(elecs.seizure_zone, 'SOZ')); % first set SOZ channels to bad
-all_channels.soz = ismember(all_channels.name, elecsSOZ);
+all_channels.soz = ismember(all_channels.name, elecsSOZ); % 1 is SOZ, 0 is no SOZ
 
 
 %% Loop through NSD01 - NSD10 and all runs individually, concatenate output at the end
@@ -69,13 +69,8 @@ for ii = 1:length(data_info)
 
     %%% ------------------------------------------------------------%%% 
     %%% Load events
-    try
-        events =  readtable(fullfile(localDataPath.input, ['sub-' sub_label], ['ses-' ses_label], 'ieeg', ...
-            data_info(ii).eventsname), 'FileType', 'text', 'Delimiter', '\t', 'TreatAsEmpty', 'n/a');
-    catch
-        warning('Error loading events file for %02d, skipping', ii); % e.g., no 2nd run for a certain NSD session
-        continue
-    end
+    events =  readtable(fullfile(localDataPath.input, ['sub-' sub_label], ['ses-' ses_label], 'ieeg', ...
+        data_info(ii).eventsname), 'FileType', 'text', 'Delimiter', '\t', 'TreatAsEmpty', 'n/a');
 
     % make sure status description is a cell array to concatenate
     if ~iscell(events.status_description)
@@ -157,7 +152,7 @@ for ii = 1:length(data_info)
     for jj = 1:height(eventsSTCurr)
         BB(:,:,jj) = bb_power(:, (round(eventsSTCurr.onset(jj)*srate)+samprange(1)+1) : (round(eventsSTCurr.onset(jj)*srate)+samprange(end)+1)); % convert to 1 indexing
     end
-    
+
     %%% ------------------------------------------------------------%%% 
     %%% Concatenate data and events
     Mdata = cat(3, Mdata, M);
