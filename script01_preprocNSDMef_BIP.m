@@ -139,6 +139,9 @@ for ii = 1:length(data_info)
     
     [dataOut, bipolarNames, ~, badChs_bip] = ieeg_bipolarSEEG(data(seeg_chans,:)', all_channels.name(seeg_chans), badChs, seg5, seg6);
 
+    % find bipolar soz (in analogous way to badChs -- any bipolar ch with 1+ soz ch is also soz)
+    [~, ~, ~, soz_bip] = ieeg_bipolarSEEG(data(seeg_chans,:)', all_channels.name(seeg_chans), find(all_channels.soz), seg5, seg6);
+
     % concatenate sEEG channels with other channels that were not BIP re-referenced
     data_bip = [dataOut data(other_chans,:)']';
     
@@ -149,6 +152,8 @@ for ii = 1:length(data_info)
     bip_channels.type = [bip_channels.type; all_channels.type(other_chans)];
     bip_channels.status = [true(size(bipolarNames)); all_channels.status(other_chans)];
     bip_channels.status(badChs_bip) = false; % since all bipolar channels are contiguous starting from 1, this indexing is accurate
+    bip_channels.soz = [false(size(bipolarNames)); all_channels.soz(other_chans)];
+    bip_channels.soz(soz_bip) = true;
 
     clear dataOut
 
